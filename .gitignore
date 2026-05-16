@@ -1,0 +1,39 @@
+# Secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+!.env.local.example
+!.env.example
+
+# Child repositories — tracked in their own GitHub repos, not here
+/cms-frontend
+/cms-backend
+
+# Node
+node_modules/
+.pnpm-store/
+
+# Build artifacts
+.next/
+dist/
+build/
+out/
+
+# Test
+coverage/
+.nyc_output/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Claude Code per-user overrides
+.claude/settings.local.json
