@@ -35,5 +35,3 @@ Thumbs.db
 npm-debug.log*
 pnpm-debug.log*
 
-# Claude Code per-user overrides
-.claude/settings.local.json
