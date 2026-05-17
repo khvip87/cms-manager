@@ -41,7 +41,8 @@
       "mcp__atlassian__getTransitionsForJiraIssue",
       "Bash(docker compose *)",
       "Bash(DATABASE_URL=\"postgresql://cms:cms@localhost:5432/cms_e2e_test\" npx cms-db migrate)",
-      "Bash(DATABASE_URL=\"postgresql://cms:cms@localhost:5432/cms_e2e_test\" JWT_SECRET=\"ci-dummy-secret\" REDIS_URL=\"redis://localhost:6379\" FRONTEND_URL=\"http://localhost:3000\" pnpm test:e2e)"
+      "Bash(DATABASE_URL=\"postgresql://cms:cms@localhost:5432/cms_e2e_test\" JWT_SECRET=\"ci-dummy-secret\" REDIS_URL=\"redis://localhost:6379\" FRONTEND_URL=\"http://localhost:3000\" pnpm test:e2e)",
+      "Bash(git stash *)"
     ]
   },
   "enableAllProjectMcpServers": true,
