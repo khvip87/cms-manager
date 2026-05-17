@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(gh pr create --base main --head feature/CMS-13-update-cms-database-feature-doc --title 'docs\\(CMS-10\\): update feature doc for CMS-12 + CMS-13 progress' --body ' *)",
+      "mcp__atlassian__transitionJiraIssue",
+      "Bash(pnpm prisma:generate)",
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm lint *)",
+      "Bash(pnpm db:seed)",
+      "Bash(PGPASSWORD=cms \"/c/Program Files/Docker/Docker/resources/bin/docker.exe\" exec cms-postgres psql -U cms -d cms -c 'SELECT name FROM \"Role\" ORDER BY name;')",
+      "Bash(\"/c/Program Files/Docker/Docker/resources/bin/docker.exe\" exec cms-postgres psql -U cms -d cms -c 'SELECT name FROM \"_cms_seeds\";')",
+      "Bash(pnpm test *)",
+      "Bash(gh pr create --base main --head feature/CMS-14-port-role-seed --title 'CMS-14: seed runner + roles seed + dev/shared split' --body ' *)",
+      "mcp__atlassian__addCommentToJiraIssue",
+      "Bash(gh pr *)",
+      "Bash(git checkout *)",
+      "Bash(git pull *)"
+    ]
+  }
+}

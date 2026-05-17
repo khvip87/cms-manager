@@ -1,7 +1,7 @@
 # Extract database concern into a standalone `cms-database` project
 
 **Jira:** [CMS-10](https://khvip87.atlassian.net/browse/CMS-10)
-**Status:** In Progress (3/8 stories landed, 5 remaining)
+**Status:** In Progress (4/8 stories landed, 4 remaining)
 **Owners:** @pm · @tech-lead · @senior-be
 
 ## Context
@@ -176,8 +176,8 @@ Approach:
 
 - [x] CMS-11 — Scaffold `cms-database` repo + package.json + .npmrc + lint/format (PR [#1](https://github.com/khvip87/cms-database/pull/1), Merged)
 - [x] CMS-12 — Port `schema.prisma` + generate `0001_baseline/up.sql` + implement `adopt` (PR [#2](https://github.com/khvip87/cms-database/pull/2), Merged)
-- [x] CMS-13 — Implement migration runner + `_cms_migrations` table + checksum drift guard (PR [#3](https://github.com/khvip87/cms-database/pull/3), In Review)
-- [ ] CMS-14 — Port role seed into `seeds/shared/001_roles.ts`
+- [x] CMS-13 — Implement migration runner + `_cms_migrations` table + checksum drift guard (PR [#3](https://github.com/khvip87/cms-database/pull/3), Merged)
+- [x] CMS-14 — Port role seed into `seeds/shared/001_roles.ts` (PR [#4](https://github.com/khvip87/cms-database/pull/4), Merged)
 - [ ] CMS-15 — GH Actions `ci.yml` + `publish.yml` to GitHub Packages
 
 ### Backend (@senior-be)
@@ -218,7 +218,8 @@ After all 8 stories merge and `@khvip87/cms-database@0.1.0` is published:
 
 ## Notes / discussion
 
-- 2026-05-17 — CMS-13 opened as PR [#3](https://github.com/khvip87/cms-database/pull/3) (In Review). Shipped the full homegrown runner CLI: `cms-db migrate | status | diff | new | adopt | seed`. All 8 ACs verified; 6/6 integration tests green against live Postgres using isolated per-test schemas. Two real bugs caught and fixed during verification: (a) CRLF-vs-LF checksum drift on Windows — fixed by LF-normalising input to `computeChecksum` and adding `.gitattributes` to pin working-tree line endings; (b) `prisma migrate diff` always emitted `DROP TABLE "_cms_migrations"` because the runner's tracking table isn't in `schema.prisma` — `diff.ts` now filters that statement out before writing migrations, otherwise every generated migration would have dropped the runner's own tracking table on apply.
+- 2026-05-17 — CMS-14 merged via PR [#4](https://github.com/khvip87/cms-database/pull/4). Seed runner shipped with `_cms_seeds (name TEXT PK, ran_at TIMESTAMPTZ)` tracking table, idempotent re-runs, dev/shared split gated by `NODE_ENV` + `CMS_ALLOW_DEV_SEED`. `seeds/shared/001_roles.ts` upserts the 4 baseline `RoleName` values (admin/editor/author/viewer). 4 new integration tests pass against live Docker Postgres (total 10/10). Side fix: dynamic `await import('@prisma/client')` didn't survive Jest's CJS mode without `--experimental-vm-modules`, so switched to a tiny `loadPrismaModule()` helper using `require`. Added `postinstall: prisma generate` so fresh installs are zero-step. Split tsconfig into `tsconfig.json` (broad include for ESLint + typecheck) and `tsconfig.build.json` (rootDir=src for clean dist/ output). `cms-backend/prisma/seed.ts` removal deferred to CMS-16.
+- 2026-05-17 — CMS-13 merged via PR [#3](https://github.com/khvip87/cms-database/pull/3). Shipped the full homegrown runner CLI: `cms-db migrate | status | diff | new | adopt | seed`. All 8 ACs verified; 6/6 integration tests green against live Postgres using isolated per-test schemas. Two real bugs caught and fixed during verification: (a) CRLF-vs-LF checksum drift on Windows — fixed by LF-normalising input to `computeChecksum` and adding `.gitattributes` to pin working-tree line endings; (b) `prisma migrate diff` always emitted `DROP TABLE "_cms_migrations"` because the runner's tracking table isn't in `schema.prisma` — `diff.ts` now filters that statement out before writing migrations, otherwise every generated migration would have dropped the runner's own tracking table on apply.
 - 2026-05-17 — CMS-12 merged via PR [#2](https://github.com/khvip87/cms-database/pull/2). Ported `schema.prisma` from `cms-backend`, generated `migrations/0001_baseline/up.sql` via `prisma migrate diff --from-empty`, and implemented the `adopt` one-shot. Verified end-to-end against the live Docker Postgres: adopt happy path, idempotency on re-run, and drift detection all green. Schema diff between `0001_baseline/up.sql` applied to a fresh Postgres and the `schema.prisma` source-of-truth is empty for every Prisma-managed entity — the only delta is `_cms_migrations`, which is intentional (runner-internal table not modelled in Prisma).
 - 2026-05-17 — Docker Desktop had to be installed and started before live-DB verification of CMS-12 could happen (~10 min detour mid-story). Explains the gap between CMS-12 PR opening and merge timestamps.
 - 2026-05-17 — User confirmed scope and sequencing: pause CMS-1 entirely, start CMS-10 immediately. CMS-2 (In Review) and CMS-3 (In Progress) freeze and rebase after extract lands.
