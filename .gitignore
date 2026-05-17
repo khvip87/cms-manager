@@ -8,6 +8,7 @@
 # Child repositories — tracked in their own GitHub repos, not here
 /cms-frontend
 /cms-backend
+/cms-database
 
 # Node
 node_modules/
@@ -34,6 +35,3 @@ Thumbs.db
 *.log
 npm-debug.log*
 pnpm-debug.log*
-
-# Claude Code per-user overrides
-.claude/settings.local.json
