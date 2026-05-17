@@ -8,7 +8,7 @@ Associate a newly opened GitHub PR with its Jira ticket.
 ## Inputs
 - `issueKey` — e.g., `CMS-42`
 - `prUrl` — full GitHub PR URL
-- `branchName` — e.g., `feat/CMS-42-publish-articles`
+- `branchName` — e.g., `feature/CMS-42-publish-articles`
 
 ## Execution
 
