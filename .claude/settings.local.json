@@ -35,5 +35,9 @@
       "Bash(grep -v \"^$\")",
       "Bash(git rm *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "atlassian"
+  ],
+  "enableAllProjectMcpServers": true
 }
