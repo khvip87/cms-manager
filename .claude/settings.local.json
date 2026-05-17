@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(gh pr create --base main --head feature/CMS-13-update-cms-database-feature-doc --title 'docs\\(CMS-10\\): update feature doc for CMS-12 + CMS-13 progress' --body ' *)",
+      "mcp__atlassian__transitionJiraIssue",
+      "Bash(pnpm prisma:generate)",
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm lint *)",
+      "Bash(pnpm db:seed)",
+      "Bash(PGPASSWORD=cms \"/c/Program Files/Docker/Docker/resources/bin/docker.exe\" exec cms-postgres psql -U cms -d cms -c 'SELECT name FROM \"Role\" ORDER BY name;')",
+      "Bash(\"/c/Program Files/Docker/Docker/resources/bin/docker.exe\" exec cms-postgres psql -U cms -d cms -c 'SELECT name FROM \"_cms_seeds\";')",
+      "Bash(pnpm test *)",
+      "Bash(gh pr create --base main --head feature/CMS-14-port-role-seed --title 'CMS-14: seed runner + roles seed + dev/shared split' --body ' *)",
+      "mcp__atlassian__addCommentToJiraIssue",
+      "Bash(gh pr *)",
+      "Bash(git checkout *)",
+      "Bash(git pull *)",
+      "Bash(pnpm install *)",
+      "Bash(node -e \"const y=require\\('js-yaml'\\); ['ci','publish'].forEach\\(n => { const f=require\\('fs'\\).readFileSync\\('.github/workflows/'+n+'.yml','utf-8'\\); try { y.load\\(f\\); console.log\\(n+': OK'\\); } catch\\(e\\) { console.log\\(n+': '+e.message\\); } }\\);\")",
+      "Bash(pnpm build *)",
+      "Bash(gh run *)",
+      "Bash(git fetch *)",
+      "Bash(node -p \"require\\('./package.json'\\).version\")",
+      "Bash(git ls-remote *)",
+      "Bash(git ls-tree *)",
+      "Bash(git commit -m 'docs: add '\\\\''Releasing a new version'\\\\'' section \\(Option A + Option B\\) *)",
+      "Bash(gh api *)",
+      "Bash(gh auth *)",
+      "Bash(NODE_AUTH_TOKEN=$\\(gh auth token\\) pnpm install)",
+      "Bash(pnpm test:e2e)",
+      "PowerShell($docker = \"C:\\\\Program Files\\\\Docker\\\\Docker\\\\resources\\\\bin\\\\docker.exe\"; & $docker ps --filter \"name=cms-postgres\" --format \"{{.Names}} {{.Status}}\" 2>&1)",
+      "Bash(grep -v \"^$\")",
+      "Bash(git rm *)"
+    ]
+  }
+}
