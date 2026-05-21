@@ -180,6 +180,12 @@ Allows partial translations, per-locale publish status, clean TMS integration.
 
 **Local dev DB:** Docker Compose at workspace root with Postgres 16 + Redis (for BullMQ). Backend env: `DATABASE_URL=postgres://cms:cms@localhost:5432/cms`.
 
+**Backend ↔ database deployment topology:** `cms-backend` and Postgres are **decoupled at runtime** — the backend opens a TCP connection to whatever `DATABASE_URL` resolves to. No hardcoded host, no Compose-service alias, no unix-socket dependency anywhere in the code (`cms-backend/src/config/configuration.ts` reads `process.env.DATABASE_URL` and that is the only knob). The same backend binary works against the workspace Docker Postgres, a managed provider (Neon / Supabase / RDS), or a bare VM in a different network — flip the URL to switch. Use `sslmode=require` (or stricter) over any non-private network.
+
+`cms-database` itself is **not a server and holds no data**. It is an npm package shipping schema + migrations + seeds + the typed Prisma client. The only place data lives is the Postgres server that `DATABASE_URL` points to.
+
+**Who runs migrations in a split topology** is a deploy decision (CI job, one-shot init container, deploy hook, or backend-at-boot). The `cms-db` CLI shipped by `@khvip87/cms-database` accepts any `DATABASE_URL` and can run from any host with network reach to Postgres.
+
 ---
 
 ## 7. Backend stack — details
