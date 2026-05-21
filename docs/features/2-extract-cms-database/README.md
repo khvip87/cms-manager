@@ -1,7 +1,7 @@
 # Extract database concern into a standalone `cms-database` project
 
 **Jira:** [CMS-10](https://khvip87.atlassian.net/browse/CMS-10)
-**Status:** In Progress (4/8 stories landed, 4 remaining)
+**Status:** In Progress (6/8 stories merged, CMS-17 in review, CMS-18 in progress)
 **Owners:** @pm · @tech-lead · @senior-be
 
 ## Context
@@ -76,6 +76,8 @@ Deferred to implementation:
 ## Technical Design
 
 _To be expanded by @tech-lead. Summary of decisions captured in the approved plan at `C:\Users\khvip\.claude\plans\pm-agent-before-we-glowing-meadow.md`._
+
+> **Where the dev loop lives.** The step-by-step workflow for adding a new table or column (edit schema → `pnpm db:diff` → hand-edit SQL → `pnpm db:migrate` → tag/publish) is documented in **exactly one place**: [`cms-database/README.md` → Dev loop — changing the schema](https://github.com/khvip87/cms-database#dev-loop--changing-the-schema). This doc and `cms-backend/README.md` link there rather than duplicating the steps.
 
 ### Target layout
 
@@ -178,16 +180,16 @@ Approach:
 - [x] CMS-12 — Port `schema.prisma` + generate `0001_baseline/up.sql` + implement `adopt` (PR [#2](https://github.com/khvip87/cms-database/pull/2), Merged)
 - [x] CMS-13 — Implement migration runner + `_cms_migrations` table + checksum drift guard (PR [#3](https://github.com/khvip87/cms-database/pull/3), Merged)
 - [x] CMS-14 — Port role seed into `seeds/shared/001_roles.ts` (PR [#4](https://github.com/khvip87/cms-database/pull/4), Merged)
-- [ ] CMS-15 — GH Actions `ci.yml` + `publish.yml` to GitHub Packages
+- [x] CMS-15 — GH Actions `ci.yml` + `publish.yml` to GitHub Packages
 
 ### Backend (@senior-be)
 
-- [ ] CMS-16 — Install `@khvip87/cms-database`, rename Prisma→Database, delete `cms-backend/prisma/`
-- [ ] CMS-17 — Wire `cms-backend` CI auth to GH Packages + e2e against migrated schema
+- [x] CMS-16 — Install `@khvip87/cms-database`, rename Prisma→Database, delete `cms-backend/prisma/`
+- [ ] CMS-17 — Wire `cms-backend` CI auth to GH Packages + e2e against migrated schema (PR [#3](https://github.com/khvip87/cms-backend/pull/3), In Review)
 
 ### Docs (@pm + @tech-lead)
 
-- [ ] CMS-18 — Feature doc finalized; `PROJECT_MEMORY.md` updated; `cms-backend/README.md` redirect
+- [ ] CMS-18 — Feature doc finalized; `PROJECT_MEMORY.md` updated; `cms-backend/README.md` redirect (in progress — meta repo PR + cms-backend PR)
 
 ## Test plan
 
@@ -226,3 +228,5 @@ After all 8 stories merge and `@khvip87/cms-database@0.1.0` is published:
 - 2026-05-17 — Plan decisions locked in via AskUserQuestion: Hybrid tooling (Prisma DSL + checked-in SQL), own GH repo, publish `@khvip87/cms-database` to GitHub Packages, homegrown runner. See `C:\Users\khvip\.claude\plans\pm-agent-before-we-glowing-meadow.md`.
 - 2026-05-17 — Discovered the three child repos (`cms-backend`, `cms-frontend`, `cms-database`) are intentionally independent — root `content-mng-sys/.gitignore` lists them, so no `pnpm-workspace.yaml` or root `package.json` is introduced.
 - 2026-05-17 — Package name changed from `@cms/database` to `@khvip87/cms-database`. GitHub Packages requires the npm scope to match the repo owner (`khvip87`); a free `cms` GitHub org was considered but ruled out for now. CMS-11 scaffold uses `@khvip87/cms-database`; CMS-12..18 follow.
+- 2026-05-17 — CMS-17 PR opened ([cms-backend#3](https://github.com/khvip87/cms-backend/pull/3)). Adds `npx cms-db migrate` + `pnpm test:e2e` to the existing `checks` job in `.github/workflows/ci.yml`. Locally verified: migrate applied `0001_baseline` to a fresh DB, e2e passed 1/1. Repo secret used is `GH_PACKAGES_TOKEN` (a PAT with `read:packages`), not the default `GITHUB_TOKEN` — the latter cannot read packages published by a different repo. README in `cms-backend` corrected accordingly.
+- 2026-05-17 — CMS-18 docs work begun. AC1/AC2 already satisfied by this doc. Two PRs needed: (1) meta repo — update `PROJECT_MEMORY.md` section 6 (Database) to reflect cms-database as source of truth, add cms-database to repo layout, link to the cms-database dev loop; (2) cms-backend — strip the duplicated `pnpm db:diff`/`pnpm db:migrate` steps from README and replace with a redirect link, so the schema-change workflow lives in **exactly one place** (cms-database/README.md).

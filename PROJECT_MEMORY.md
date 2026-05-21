@@ -1,16 +1,17 @@
 # CMS Project Memory
 
 > Consolidated dump of every architectural decision made during planning. Treat this as the source of truth that survives across Claude sessions and onboards new contributors.
-> Last updated: 2026-05-16.
+> Last updated: 2026-05-17.
 
 ---
 
 ## 1. Project overview
 
-**Goal:** Build a Content Management System with two separate, independently deployed repositories:
+**Goal:** Build a Content Management System with three independently versioned and deployed repositories:
 
 - `cms-frontend` — Next.js admin/editor UI.
-- `cms-backend` — NestJS API, owns all data and business rules.
+- `cms-backend` — NestJS API, owns business rules and request handling.
+- `cms-database` — **single source of truth for the data layer**: Prisma schema, forward-only SQL migrations, seeds, and the homegrown `cms-db` migration runner. Publishes the generated Prisma client as `@khvip87/cms-database` to GitHub Packages on every `v*.*.*` tag. `cms-backend` consumes it as a normal npm dependency.
 
 The system is **component-based** — content is not only articles. Pages and articles are composed of arbitrary block types (hero, rich text, feature grid, CTA, etc.), so the data model has to accommodate variable structure.
 
@@ -34,7 +35,9 @@ All work is tracked in Jira (project key `CMS`) on a single Kanban board with bo
 | BE realtime | **`@nestjs/websockets`** with socket.io adapter | Presence, live notifications, future collab editing |
 | BE jobs | **`@nestjs/bullmq`** | Scheduled publishing, search reindex, email, image processing |
 | DB engine | **PostgreSQL 16+** | Relational core (users/roles/audit) + JSONB for variable component trees |
-| ORM | **Prisma** | Best DX; migration tooling; 10-line NestJS integration |
+| Schema home | **`cms-database`** (own GH repo) — Prisma DSL + checked-in `migrations/NNNN_*/up.sql` | Decouples DB lifecycle from backend deploys; ships as `@khvip87/cms-database` on GitHub Packages |
+| Migration runner | **Homegrown `cms-db` CLI** (`migrate`, `status`, `diff`, `new`, `adopt`, `seed`) over `pg` | ~150 LOC; checksum drift detection; forward-only |
+| ORM | **Prisma** — generated client re-exported by `@khvip87/cms-database` | Best DX; `cms-backend` imports `Prisma`, `DatabaseClient`, enums from the published package |
 | Search | **Postgres FTS** initially; Meilisearch later if FTS limits bite | No external service to start |
 | Local dev DB | **Docker Postgres + Redis** via workspace `docker-compose.yml` | Single command spin-up |
 | CI | **GitHub Actions per repo** — lint + typecheck + test + build | No deploys wired yet |
@@ -141,6 +144,12 @@ public/locales/{en,ar}/
 
 **Engine:** PostgreSQL 16+. **ORM:** Prisma.
 
+**Single source of truth: `cms-database` (own GitHub repo).** Schema, migrations, seeds, and the typed Prisma client all live in [`khvip87/cms-database`](https://github.com/khvip87/cms-database) and ship as the npm package **`@khvip87/cms-database`** published to GitHub Packages on every `v*.*.*` tag. `cms-backend` installs this package like any other dependency and re-exports its client as `DatabaseService` (extends the generated `PrismaClient` with Nest lifecycle hooks).
+
+> **Hard rule: never edit schema or migration files inside `cms-backend`.** The `cms-backend/prisma/` directory was deleted in CMS-16. All schema changes happen in `cms-database/`.
+
+**The dev loop for "add a new table/column" is documented in exactly one place:** [`cms-database/README.md` → Dev loop](https://github.com/khvip87/cms-database#dev-loop--changing-the-schema). This file does not repeat the steps — see [[architecture-cms-database-extract]] for the high-level architecture.
+
 **Hybrid content model:**
 - **Relational tables** for users, roles, permissions, audit log, tags, media, comments, sessions, settings, base entity tables (articles, pages).
 - **JSONB columns** for variable component trees (e.g., `Page.blocks`, `Article.blocks`). GIN index where queried into.
@@ -156,9 +165,16 @@ ArticleTranslation { articleId, locale, title, body, status }
 Allows partial translations, per-locale publish status, clean TMS integration.
 
 **Migrations:**
-- All schema changes via `prisma migrate dev --name <slug>`.
+- All schema changes via `pnpm db:diff -- --name <slug>` **inside `cms-database/`** (wraps `prisma migrate diff` to write `migrations/NNNN_<slug>/up.sql`).
+- Apply with `pnpm db:migrate` (the homegrown `cms-db` runner — forward-only, SHA-256 checksum drift detection against `_cms_migrations` table).
 - Naming: `<verb>_<entity>` (e.g., `add_articles_table`).
-- Never `prisma db push` in shared environments — bypasses migrations.
+- Never `prisma db push` in shared environments — bypasses the migration runner and breaks drift detection.
+- Existing databases without `_cms_migrations` adopt the baseline via `pnpm db:adopt` (one-shot, idempotent).
+
+**Publishing & consumption:**
+- Tag `vX.Y.Z` on `cms-database` `main` → `publish.yml` builds and pushes `@khvip87/cms-database@X.Y.Z` to GitHub Packages.
+- `cms-backend` bumps `"@khvip87/cms-database"` in its `package.json`; `pnpm install` (with `NODE_AUTH_TOKEN` set) pulls the new version; `pnpm typecheck` picks up the new types.
+- CI in `cms-backend` authenticates to GH Packages via repo secret **`GH_PACKAGES_TOKEN`** (a PAT with `read:packages` — `secrets.GITHUB_TOKEN` cannot read packages published by a different repo). CI applies migrations against an ephemeral Postgres via `npx cms-db migrate` before running `pnpm test:e2e`, so any schema bump that breaks e2e fails CI before merge.
 
 **Search:** Postgres full-text search via `tsvector` + GIN. Graduate to Meilisearch only if/when FTS limits clearly bite.
 
@@ -354,24 +370,31 @@ docs/
 
 ## 13. Repo layout (workspace root)
 
+The meta repo `content-mng-sys` is a **documentation/scratch repo only** — it gitignores all three child repos. There is **no `pnpm-workspace.yaml` and no root `package.json`**; each child is a fully independent git repo with its own CI, release cadence, and deploys.
+
 ```
-D:\projects\content-mng-sys\
+D:\projects\content-mng-sys\           ← meta repo (gitignores all 3 children)
 ├── .claude/
-│   ├── agents/                     ← 4 subagent personas
-│   └── skills/                     ← CMS-specific skills
-├── .mcp.json                       ← Atlassian MCP server (reads ${JIRA_API_TOKEN} from env)
-├── .env.local                      ← gitignored — holds JIRA_API_TOKEN
-├── .env.local.example              ← template, committed, placeholder only
-├── .gitignore
+│   ├── agents/                        ← 4 subagent personas
+│   └── skills/                        ← CMS-specific skills
+├── .mcp.json                          ← Atlassian MCP server (reads ${JIRA_API_TOKEN} from env)
+├── .env.local                         ← gitignored — holds JIRA_API_TOKEN
+├── .env.local.example                 ← template, committed, placeholder only
+├── .gitignore                         ← lists /cms-frontend, /cms-backend, /cms-database
+├── docker-compose.yml                 ← Postgres 16 + Redis 7 for local dev
 ├── scripts/
-│   └── load-env.ps1                ← loads .env.local into shell before launching claude
+│   └── load-env.ps1                   ← loads .env.local into shell before launching claude
 ├── docs/
 │   ├── README.md
 │   ├── features/
+│   │   ├── 1-add-new-articles/
+│   │   └── 2-extract-cms-database/
 │   └── bugs/
-├── PROJECT_MEMORY.md               ← this file
-├── cms-frontend/                   ← independent git repo
-└── cms-backend/                    ← independent git repo (scaffolding pending)
+├── PROJECT_MEMORY.md                  ← this file
+├── cms-frontend/                      ← github.com/khvip87/cms-frontend  (independent)
+├── cms-backend/                       ← github.com/khvip87/cms-backend   (independent)
+└── cms-database/                      ← github.com/khvip87/cms-database  (independent)
+                                        Publishes @khvip87/cms-database to GH Packages
 ```
 
 User-level files outside the workspace:
