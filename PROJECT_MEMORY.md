@@ -296,6 +296,148 @@ Architecture makes hosting pluggable: provision Postgres 16+ anywhere → set `D
 - `sslmode=require` (or stricter) over any non-private network.
 - Network reach from whatever runs migrations to the DB.
 
+### Redis — purpose, persistence, hosting
+
+**What `redis:7-alpine` is:** the official Redis 7.x server on Alpine Linux (~40 MB vs ~140 MB for the full image — same server, smaller pull). Listens on port 6379.
+
+**What we use Redis for:**
+1. **BullMQ — background job queue (primary).** BullMQ stores queues, delayed jobs, retries, and rate limits in Redis. Backend modules that import BullMQ fail at boot if Redis is unreachable.
+2. **Future:** refresh-token denylist when refresh tokens land (see section 5 — not used yet).
+
+**Why Redis 7:** BullMQ requires Redis ≥ 5; 7 is current stable.
+
+**When Redis must be running:**
+- Booting `cms-backend` (queue modules try to connect).
+- CI tests that touch a queue.
+- *Not* needed for frontend-only work or pure `cms-database` schema/migration tasks.
+
+#### Persistence — what survives a stop/restart
+
+Redis is in-memory. Whether data survives depends on (a) persistence config and (b) how the container stops.
+
+| Action | Survives? |
+|---|---|
+| `docker compose stop` / container crash / host reboot | Container halts; volume + writable layer stay. On next `start`, Redis reloads from `/data`. Survives **if persistence is on**. |
+| `docker compose down` | Containers removed; `cms-redis-data` volume persists. Recreate → same `/data` remounted → data still there. |
+| `docker compose down -v` | Volume deleted. Gone for good. |
+
+**Redis persistence modes:**
+- **No persistence** — RAM only; restart = clean slate.
+- **RDB snapshots (default in `redis:7-alpine`)** — periodic dumps to `/data/dump.rdb` (default: every 1h if ≥1 key changed, every 5min if ≥100, every 1min if ≥10k) **and on graceful SIGTERM**. Lossy on hard crash — writes since the last snapshot are lost.
+- **AOF (append-only file)** — every write logged to `/data/appendonly.aof`, replayed on boot. Near-zero loss with `appendfsync everysec`. **Off by default** in the official image.
+- **Both** — durable; standard prod config.
+
+**Our current compose setup** (`docker-compose.yml:20-32`): `redis:7-alpine` + named volume `cms-redis-data:/data` → RDB only. Graceful stop preserves data; hard crash loses writes since the last snapshot. Fine for dev.
+
+#### Redis hosting playbooks
+
+**Local dev**
+- `docker compose up -d redis`. `REDIS_URL=redis://localhost:6379`. No TLS. RDB persistence to named volume is sufficient.
+
+**Azure (Azure Cache for Redis)**
+1. Portal → Azure Cache for Redis → Basic C0 (dev/staging) or Standard/Premium (prod with replica + persistence).
+2. Premium tier needed for AOF-like data persistence and VNet integration.
+3. `REDIS_URL=rediss://<host>.redis.cache.windows.net:6380?password=<key>` (note `rediss://` — TLS on 6380, not 6379).
+4. Pair with Azure Database for PostgreSQL in the same region/VNet for low latency.
+
+**AWS (ElastiCache for Redis)**
+1. ElastiCache → Redis OSS → engine version 7.x. Cluster mode disabled is simpler; enable Multi-AZ + automatic failover for prod.
+2. Put in private subnets; security group allows port 6379 from backend SG.
+3. Enable **automatic backups** (daily snapshots) and **AOF** via parameter group for durability.
+4. `REDIS_URL=rediss://<primary-endpoint>:6379` (TLS recommended; configured at cluster creation).
+
+**Dedicated server (self-managed)**
+1. `sudo apt install redis-server` (or compile 7.x).
+2. Edit `/etc/redis/redis.conf`:
+   - `appendonly yes`
+   - `appendfsync everysec`
+   - `maxmemory-policy noeviction` (critical for BullMQ — see hard rule below)
+   - `bind` to backend-reachable interface, not `0.0.0.0` exposed publicly.
+   - `requirepass <strong-pwd>` and `tls-port` with certs for non-private networks.
+3. Run **primary + replica** with **Redis Sentinel** (HA) or **Redis Cluster** (sharded HA).
+4. Persistent volume on durable storage (EBS, Azure Managed Disks) — not container ephemeral storage.
+5. Off-box backups of `dump.rdb` / AOF to S3/Blob.
+
+**Managed alternatives:** Upstash (serverless, pay-per-request — good fit if queue volume is bursty), Redis Cloud (the official Redis Inc. offering).
+
+#### Hard rules for BullMQ + Redis
+
+- **Never run prod BullMQ against a Redis with no persistence.** Jobs marked "completed" that never actually persisted is a silent foot-gun.
+- **`maxmemory-policy noeviction`** — BullMQ uses Redis as durable storage, not a cache. LRU/LFU eviction would silently drop queued jobs.
+- **TLS (`rediss://`)** over any non-private network. Same threat model as `sslmode=require` for Postgres.
+- **Don't share a Redis instance** between BullMQ and cache use-cases with eviction enabled — separate databases (e.g., `redis://host/0` for queues, `/1` for cache) or separate instances.
+
+### Local data inspection — GUI tools
+
+**Postgres — recommended order:**
+1. **Prisma Studio** — zero install, schema-aware, JSONB-aware. Launch from `cms-database/`: `DATABASE_URL=postgres://cms:cms@localhost:5432/cms pnpm prisma studio` → `http://localhost:5555`. Best for inspecting/editing single rows during dev.
+2. **pgAdmin 4** (baked into compose) — full server admin (users, replication, raw SQL, query plans) that Prisma Studio lacks.
+3. **External desktop apps** (use any one):
+   - **DBeaver** (free, heavy, powerful, universal)
+   - **TablePlus** (freemium, cleanest UI)
+   - **Beekeeper Studio** (free, modern, lighter than DBeaver)
+   - **DataGrip** (JetBrains, paid — best if already on IntelliJ/WebStorm)
+4. **CLI:** `docker exec -it cms-postgres psql -U cms -d cms`.
+
+**Redis — recommended order:**
+1. **RedisInsight** (baked into compose, also free desktop app from redis.io/insight) — type-aware editors, BullMQ-friendly key navigation under `bull:*` prefixes.
+2. **TablePlus** if already using it for Postgres (one tool, two DBs).
+3. **CLI:** `docker exec -it cms-redis redis-cli`. Useful commands: `KEYS *` (dev only — O(N)), `TYPE <key>`, `HGETALL bull:<queue>:<id>`, `LRANGE bull:<queue>:wait 0 -1`.
+
+#### Baked-in browser GUIs (in `docker-compose.yml`)
+
+Two extra services run alongside `postgres` + `redis`. Bring everything up with `docker compose up -d`.
+
+| Service | URL | Login | Notes |
+|---|---|---|---|
+| **pgAdmin 4** | http://localhost:5050 | `dev@cms.dev` / `cms` | Set via `PGADMIN_DEFAULT_EMAIL` / `PGADMIN_DEFAULT_PASSWORD` env vars. |
+| **RedisInsight** | http://localhost:5540 | none | No auth in default image. |
+
+Adding a connection inside these GUIs — **use the Compose service name as the host, not `localhost`**, because the GUI container reaches Postgres/Redis on the Docker network, not the host network.
+
+**pgAdmin — register the Postgres server (first-time setup):**
+
+pgAdmin's sidebar is empty after login. The `cms` database won't appear until you register the server connection.
+
+1. Open http://localhost:5050 → log in with `dev@cms.dev` / `cms`.
+2. Left sidebar → right-click **"Servers"** → **Register** → **Server…**
+3. **General** tab → Name: `cms-local` (any label works).
+4. **Connection** tab — fill exactly:
+   - Host name/address: **`postgres`** (Compose service name — NOT `localhost` and NOT `127.0.0.1`)
+   - Port: `5432`
+   - Maintenance database: `postgres` (default — the bootstrap DB pgAdmin connects through, not the one you'll browse)
+   - Username: `cms`
+   - Password: `cms` (tick "Save password")
+5. **Save**.
+
+After saving, expand the tree to find the `cms` database:
+```
+Servers
+└── cms-local
+    └── Databases
+        ├── cms         ← the application database
+        │   └── Schemas → public → Tables
+        └── postgres    ← built-in maintenance DB, ignore
+```
+
+**Empty tables list under `cms` is not a pgAdmin bug** — it means migrations haven't been run yet. From `cms-database/`:
+```
+DATABASE_URL=postgres://cms:cms@localhost:5432/cms pnpm db:migrate
+```
+Then right-click "Tables" in pgAdmin → Refresh.
+
+**RedisInsight → Add Database:**
+- Host: `redis` (NOT `localhost`)
+- Port: `6379`, no password, no TLS.
+
+#### Gotchas learned the hard way
+
+- **pgAdmin rejects `.local` TLDs** in `PGADMIN_DEFAULT_EMAIL` (RFC 6762 mDNS reserved). Use `.dev`, `.com`, or any real-looking TLD. Container exits with code 1 and logs `'<email>' does not appear to be a valid email address` if you use `.local`.
+- **pgAdmin credentials apply only on first start.** Default email/password are written into pgAdmin's internal SQLite on first boot; changing the env vars later does nothing. To rotate: change password from inside the UI, or wipe the container + its named volume and recreate.
+- **Editing `docker-compose.yml` doesn't restart services.** Compose doesn't watch the file. After adding/changing a service, run `docker compose up -d` again — it'll start new services and recreate changed ones without touching healthy unchanged ones.
+- **Exited containers don't show in `docker compose ps`.** If a new service "didn't start," check `docker compose ps -a` and then `docker compose logs <service>` — silent exits are the most common debugging trap.
+- **`localhost` from inside a container points to the container itself, not the host.** GUIs that run as containers (pgAdmin, RedisInsight, the backend) must connect to other services via the Compose service name. Only the host-side dev shell uses `localhost:5432` / `localhost:6379`.
+
 ---
 
 ## 7. Backend stack — details
