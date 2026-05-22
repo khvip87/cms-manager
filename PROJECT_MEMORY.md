@@ -96,6 +96,34 @@ public/locales/{en,ar}/
 └── <namespace>.json
 ```
 
+**Using translations in a server component (RSC):**
+Import `initI18nServer` from `@/i18n/server`. It reads each requested namespace JSON directly off disk (no HTTP, no React context), builds a fresh i18next instance, and returns it. Grab a `t` via `getFixedT(locale, ns)`. `locale` comes from the route segment (`/[locale]/...`) — note Next 16 makes `params` a Promise.
+
+```tsx
+// src/app/[locale]/articles/page.tsx
+import { notFound } from "next/navigation"
+import { initI18nServer } from "@/i18n/server"
+import { isLocale } from "@/i18n/settings"
+
+export default async function ArticlesPage({
+  params,
+}: {
+  params: Promise<{ locale: string }>
+}) {
+  const { locale } = await params
+  if (!isLocale(locale)) notFound()
+
+  const i18n = await initI18nServer(locale, ["articles"]) // loads public/locales/<locale>/articles.json
+  const t = i18n.getFixedT(locale, "articles")
+
+  return <h1>{t("page.title")}</h1>
+}
+```
+
+Reference impl: `cms-frontend/src/app/[locale]/page.tsx`. The second arg defaults to `[defaultNS]` ("common"), so omit it when you only need the common namespace.
+
+Do **not** call `useTranslation()` in a server component — that hook is client-only. For interactive children, mark them `'use client'` and let `I18nProvider` supply the namespace via `useTranslation('articles')`.
+
 **Content i18n schema (DB):** **separate translation tables** (`<entity>_translations` with `(entityId, locale)` PK). Never embed locales inside the parent JSON column.
 
 ---
@@ -185,6 +213,88 @@ Allows partial translations, per-locale publish status, clean TMS integration.
 `cms-database` itself is **not a server and holds no data**. It is an npm package shipping schema + migrations + seeds + the typed Prisma client. The only place data lives is the Postgres server that `DATABASE_URL` points to.
 
 **Who runs migrations in a split topology** is a deploy decision (CI job, one-shot init container, deploy hook, or backend-at-boot). The `cms-db` CLI shipped by `@khvip87/cms-database` accepts any `DATABASE_URL` and can run from any host with network reach to Postgres.
+
+### Migrations vs. seeds — the mental model
+
+| | Migrations | Seeds |
+|---|---|---|
+| Touches | Schema (DDL — tables, columns, indexes, enums, constraints) | Data (DML — rows the app needs to function) |
+| Frequency | Every deploy that ships schema changes | Once at bootstrap; then dev/test only |
+| Reversible? | Forward-only — write a new migration to undo | Yes (delete the rows) |
+| Safe in prod? | Yes — required | Only the first time |
+
+**Order is fixed:** migrations always run *before* seeds. Seeds reference tables; if the table doesn't exist yet, the seed crashes.
+
+**Migrations — when to run:**
+- Fresh database (local Docker, new managed instance, ephemeral CI DB).
+- After pulling code that includes new migration files (or after `cms-backend` bumps to a `@khvip87/cms-database` version that ships new migrations).
+- In CI before e2e tests.
+- On every deploy where the new code expects a newer schema — run as a one-shot job **before** the new backend serves traffic.
+
+**Migrations — when NOT to run:** at normal app boot, or after code-only changes that don't touch the schema.
+
+**Seeds — what they contain:** baseline rows the app can't function without — roles (`admin`, `editor`, `author`, `viewer`), permissions, default settings, the bootstrap admin user, sample tags. Seeds are idempotent (`upsert` style).
+
+**Seeds — when to run:**
+- Fresh database (so login works and roles exist).
+- CI / test environments (predictable fixtures for e2e).
+- Local dev (sample content to click around with).
+- Demo / staging refresh after a wipe.
+
+**Seeds — when NOT to run:** production after day-one bootstrap. Real data has accumulated; re-seeding could duplicate or overwrite it.
+
+**Fresh-environment bootstrap order:**
+```
+1. Provision Postgres → set DATABASE_URL
+2. npx cms-db migrate   # build the schema
+3. pnpm db:seed         # populate baseline rows (skip in prod after day 1)
+4. Start cms-backend
+```
+
+### Hosting playbooks — Postgres provisioning
+
+Architecture makes hosting pluggable: provision Postgres 16+ anywhere → set `DATABASE_URL` → run `npx cms-db migrate`. Zero code changes in `cms-backend` or `cms-database`. Redis (for BullMQ) is a separate decision per environment.
+
+**Local development**
+1. `docker compose up -d postgres redis` from workspace root.
+2. `cms-backend/.env`: `DATABASE_URL=postgres://cms:cms@localhost:5432/cms` and `REDIS_URL=redis://localhost:6379`.
+3. `pnpm db:migrate` then `pnpm db:seed` (inside `cms-database`).
+4. `pnpm dev` in `cms-backend`. No SSL needed — private bridge network.
+
+**Azure (Azure Database for PostgreSQL — Flexible Server)**
+1. Portal → Azure Database for PostgreSQL → Flexible Server → Postgres **16**, region, SKU (Burstable B1ms staging / General Purpose prod), admin user/password.
+2. Networking: Private access via VNet injection for prod; if Public, add firewall rules for CI runner IP and backend egress IP.
+3. Create the `cms` database under "Databases".
+4. Redis: Azure Cache for Redis (Basic C0 OK for low-volume BullMQ).
+5. `DATABASE_URL=postgresql://<user>:<pwd>@<server>.postgres.database.azure.com:5432/cms?sslmode=require` — SSL is mandatory, Azure rejects non-SSL.
+6. Migrations from CI or one-shot job: `DATABASE_URL=... npx -y @khvip87/cms-database cms-db migrate`.
+7. Deploy `cms-backend` on App Service / Container Apps / AKS with `DATABASE_URL` + `REDIS_URL` as app settings.
+
+**AWS (RDS for PostgreSQL or Aurora PostgreSQL)**
+1. RDS → Create database → PostgreSQL **16.x**. Aurora PG-compatible for prod (better failover); single-AZ RDS for staging.
+2. VPC: private subnets. Security group inbound: allow 5432 from backend's SG (and CI runner NAT IP if migrations run from CI).
+3. Set initial DB name to `cms` during creation.
+4. Redis: ElastiCache for Redis (cache.t4g.micro).
+5. `DATABASE_URL=postgresql://<user>:<pwd>@<endpoint>.rds.amazonaws.com:5432/cms?sslmode=require`. Use AWS RDS CA bundle if `sslmode=verify-full`.
+6. Migrations: run inside the VPC (ECS one-shot task, CodeBuild step, or Lambda). Cleanest pattern: pipeline triggers an ECS task whose image executes `npx cms-db migrate`.
+7. Deploy `cms-backend` on ECS Fargate / EKS / Beanstalk with `DATABASE_URL` from Secrets Manager.
+8. Gotcha: running migrations from outside the VPC needs a bastion or SSM tunnel — prefer in-VPC tasks.
+
+**Dedicated server (bare VM or on-prem)**
+1. `sudo apt install -y postgresql-16`.
+2. `sudo -u postgres psql -c "CREATE ROLE cms LOGIN PASSWORD '<pwd>';"` + `CREATE DATABASE cms OWNER cms;`.
+3. Network: same-box → leave on localhost, no SSL. Cross-box → edit `postgresql.conf` (`listen_addresses = '*'`), `pg_hba.conf` (allow backend IP with `scram-sha-256`), enable SSL (`ssl = on` + certs), firewall to backend only.
+4. Redis: `sudo apt install redis-server`, bind localhost or firewall.
+5. Same-host URL: `postgresql://cms:<pwd>@localhost:5432/cms`. Cross-host: `postgresql://cms:<pwd>@db.internal:5432/cms?sslmode=require`.
+6. Migrations from anywhere with network reach: `DATABASE_URL=... npx -y @khvip87/cms-database cms-db migrate`.
+7. Backups: `pg_basebackup` + WAL archiving to S3/Blob, or `pgBackRest`. You own patching, HA, monitoring — managed providers do this for you.
+
+**Cloudflare — not viable as the data plane.** D1 is SQLite (incompatible with our `tsvector`/`jsonb`/GIN usage). Hyperdrive is a pooler in front of an external Postgres, not a host. If Cloudflare is wanted in the path: provision Postgres on Neon/Supabase/RDS, point Hyperdrive at it, use the Hyperdrive URL as `DATABASE_URL` at runtime — but run migrations against the **origin** URL, not Hyperdrive.
+
+**Universal requirements** (all hosting paths):
+- Postgres **16+**.
+- `sslmode=require` (or stricter) over any non-private network.
+- Network reach from whatever runs migrations to the DB.
 
 ---
 
